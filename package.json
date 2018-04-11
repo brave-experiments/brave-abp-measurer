@@ -1,0 +1,18 @@
+{
+  "name": "brave-abp-measurer",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "ad-block": "git+https://www.github.com/snyderp/ad-block#2b08c3b",
+    "adm-zip": "^0.4.7",
+    "aws-sdk": "^2.223.1",
+    "selenium-webdriver": "^4.0.0-alpha.1",
+    "sync-request": "^6.0.0"
+  }
+}
