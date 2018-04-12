@@ -11,8 +11,11 @@
   "dependencies": {
     "ad-block": "git+https://www.github.com/snyderp/ad-block#2b08c3b",
     "adm-zip": "^0.4.7",
-    "aws-sdk": "^2.223.1",
-    "selenium-webdriver": "^4.0.0-alpha.1",
-    "sync-request": "^6.0.0"
+    "fs-extra": "^5.0.0",
+    "pg": "^7.4.1",
+    "request": "^2.85.0",
+    "request-promise": "^4.2.2",
+    "request-promise-native": "^1.0.5",
+    "selenium-webdriver": "^4.0.0-alpha.1"
   }
 }

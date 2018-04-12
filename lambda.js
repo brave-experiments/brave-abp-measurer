@@ -1,122 +1,182 @@
 "use strict";
 
 const path = require("path");
-const fs = require("fs");
-const urlLib = require("url");
+const util = require("util");
 
 const AdmZip = require("adm-zip");
-const request = require("sync-request");
-const AWS = require("aws-sdk");
+const rp = require("request-promise");
+const fs = require("fs-extra");
 
 const crawler = require("./lib/crawl");
+const db = require("./lib/db");
+const utils = require("./lib/utils");
+
+const chromeUrl = "https://s3.amazonaws.com/com.brave.research.crawls.resources/chrome-linux.zip";
+const chromeDriverUrl = "https://chromedriver.storage.googleapis.com/2.37/chromedriver_linux64.zip";
+const chromeHeadlessUrl = "https://github.com/adieuadieu/serverless-chrome/releases/download/v1.0.0-38/stable-headless-chromium-amazonlinux-2017-03.zip";
 
 const zippedChromeDriverPath = path.join("/tmp", "chromedriver.zip");
 const unzippedChromeDriverPath = path.join("/tmp", "chromedriver");
+const chromeDriverBinaryPath = path.join(unzippedChromeDriverPath, "chromedriver");
 
 const zippedChromeHeadlessPath = path.join("/tmp", "stable-headless-chromium-amazonlinux-2017-03.zip");
 const unzippedChromeHeadlessPath = path.join("/tmp", "headless-chromium");
+const chromeHeadlessBinaryPath = path.join(unzippedChromeHeadlessPath, "headless-chromium");
 
-const zippedChromePath = path.join("/tmp", "chrome-linux.zip");
-const unzippedChromePath = path.join("/tmp", "chrome-linux");
+const braveFiltersPath = path.join("/tmp", "abp-filters.txt");
 
-const crawl = (event, context) => {
+const writeFilePromise = util.promisify(fs.writeFile);
+const readFilePromise = util.promisify(fs.readFile);
+const existsPromise = util.promisify(fs.pathExists);
+const statPromise = util.promisify(fs.stat);
+const unlinkPromise = util.promisify(fs.unlink);
+const emptyDirPromise = util.promisify(fs.emptyDir);
+const chmodPromise = util.promisify(fs.chmod);
+const rmdirPromise = util.promisify(fs.rmdir);
 
-    const contextArgs = event || {};
-    const debug = contextArgs.debug === true;
+const possibleTempFiles = [
+    zippedChromeDriverPath,
+    chromeDriverBinaryPath,
+    zippedChromeHeadlessPath,
+    chromeHeadlessBinaryPath,
+    braveFiltersPath,
+];
 
-    const debugMessage = msg => {
+const possibleTempDirs = [
+    unzippedChromeHeadlessPath,
+    unzippedChromeDriverPath,
+    "/tmp/data-path",
+    "/tmp/cache-dir",
+];
+
+let debugMessage;
+
+async function cleanTempDir () {
+
+    debugMessage("Cleaning up...");
+
+    const cleanedDirs = [];
+
+    for (let tempPath of possibleTempFiles) {
+        if (await existsPromise(tempPath)) {
+            debugMessage("Removing: " + tempPath);
+            await unlinkPromise(tempPath);
+            cleanedDirs.push(tempPath);
+        }
+    }
+
+    for (let tempPath of possibleTempDirs) {
+        if (await existsPromise(tempPath)) {
+            debugMessage("Removing: " + tempPath);
+            await emptyDirPromise(tempPath);
+            await rmdirPromise(tempPath);
+            cleanedDirs.push(tempPath);
+        }
+    }
+
+    return Promise.resolve(cleanedDirs);
+};
+
+const dispatch = (event, context) => {
+    let promise;
+    if (event.Records !== undefined) {
+        const args = utils.dynamoRecordsToArgs(event.Records);
+        promise = Promise.all(args.map(crawlPromise))
+    } else {
+        promise = crawlPromise(event);
+    }
+
+    promise.then(cleanTempDir).catch(cleanTempDir);
+};
+
+/**
+ * Required arguments:
+ *   url {string}
+ *
+ * Optional arguments:
+ *   debug {boolean} (default: false)
+ *   filtersUrl {string}
+ *   secs {int} (default: 5)
+ *
+ * Either local must be a string, or filtersUrl must be an string
+ */
+async function crawlPromise (args) {
+
+    const debug = args.debug === true;
+    const headless = args.headless === undefined ? true : args.headless;
+    const secs = args.secs || 5;
+
+    debugMessage = msg => {
         if (debug === true) {
             console.log("lambda handler: " + JSON.stringify(msg));
         }
     };
 
-    if (contextArgs.local === undefined) {
-        debugMessage("Fetching chromedriver");
-        let chromeDriverRequest = request("GET", "https://chromedriver.storage.googleapis.com/2.37/chromedriver_linux64.zip");
-        fs.writeFileSync(zippedChromeDriverPath, chromeDriverRequest.getBody());
-        chromeDriverRequest = undefined;
+    debugMessage("Downloading chromedriver from: " + chromeDriverUrl);
+    if (await existsPromise(zippedChromeDriverPath) !== true) {
+        let zippedChromeDriverBody = await rp({url: chromeDriverUrl, encoding: null, method: "GET"});
+        await writeFilePromise(zippedChromeDriverPath, zippedChromeDriverBody);
+        zippedChromeDriverBody = undefined;
+    }
 
-        if (contextArgs.headless === true) {
-            debugMessage("Fetching chrome headless");
-            let chromeHeadlessRequest = request("GET", "https://github.com/adieuadieu/serverless-chrome/releases/download/v1.0.0-41/stable-headless-chromium-amazonlinux-2017-03.zip")
-            fs.writeFileSync(zippedChromeHeadlessPath, chromeHeadlessRequest.getBody());
-            chromeHeadlessRequestRequest = undefined;
-        } else {
-            debugMessage("Fetching chrome");
-            let chromeRequest = request("GET", "https://s3.amazonaws.com/com.brave.research.crawls.resources/chrome-linux.zip")
-            fs.writeFileSync(zippedChromePath, chromeRequest.getBody());
-            chromeRequest = undefined;
-        }
-    } else {
-        debugMessage("Using local resources from '" + contextArgs.local + "'");
-        fs.copyFileSync(contextArgs.local + "/chromedriver.zip", zippedChromeDriverPath);
-
-        if (contextArgs.headless === true) {
-            fs.copyFileSync(contextArgs.local + "/stable-headless-chromium-amazonlinux-2017-03.zip", zippedChromeHeadlessPath);
-        } else {
-            fs.copyFileSync(contextArgs.local + "/chrome-linux.zip", zippedChromePath);
-        }
+    debugMessage("Downloading chrome-headless from: " + chromeHeadlessUrl);
+    if (await existsPromise(zippedChromeHeadlessPath) !== true) {
+        let zippedChromeHeadlessBody = await rp({url: chromeHeadlessUrl, encoding: null, method: "GET"});
+        await writeFilePromise(zippedChromeHeadlessPath, zippedChromeHeadlessBody);
+        zippedChromeHeadlessBody = undefined;
     }
 
     debugMessage("Unzipping chromedriver to " + unzippedChromeDriverPath);
-    const chromedriverZip = new AdmZip(zippedChromeDriverPath);
-    chromedriverZip.extractAllTo(unzippedChromeDriverPath, true);
-    fs.unlinkSync(zippedChromeDriverPath);
-    const chromeDriverBinaryPath = path.join(unzippedChromeDriverPath, "chromedriver");
-    fs.chmodSync(chromeDriverBinaryPath, 0o777);
+    if (await existsPromise(chromeDriverBinaryPath) !== true) {
+        const chromedriverZip = new AdmZip(zippedChromeDriverPath);
+        chromedriverZip.extractAllTo(unzippedChromeDriverPath, true);
+        await unlinkPromise(zippedChromeDriverPath);
+    }
+    await chmodPromise(chromeDriverBinaryPath, 0o777);
 
-    let chromeZip;
-    let chromeBinaryPath;
-    if (contextArgs.headless === true) {
-        debugMessage("Unzipping chrome headless to " + unzippedChromeHeadlessPath);
-        chromeZip = new AdmZip(zippedChromeHeadlessPath);
+    debugMessage("Unzipping chrome headless to " + unzippedChromeHeadlessPath);
+    if (await existsPromise(chromeHeadlessBinaryPath) === false) {
+        const chromeZip = new AdmZip(zippedChromeHeadlessPath);
         chromeZip.extractAllTo(unzippedChromeHeadlessPath, true);
-        fs.unlinkSync(zippedChromeHeadlessPath);
-        chromeBinaryPath = path.join(unzippedChromeHeadlessPath, "headless-chromium");
-    } else {
-        debugMessage("Unzipping chrome to " + unzippedChromePath);
-        chromeZip = new AdmZip(zippedChromePath);
-        chromeZip.extractAllTo(unzippedChromePath, true);
-        fs.unlinkSync(zippedChromePath);
-        chromeBinaryPath = path.join(unzippedChromePath, "chrome-linux", "chrome");
+        await unlinkPromise(zippedChromeHeadlessPath);
+    }
+    await chmodPromise(chromeHeadlessBinaryPath, 0o777);
+
+    debugMessage("Fetching filter rules from '" + args.filtersUrl + "'");
+    try {
+        const filtersBody = await rp.get(args.filtersUrl);
+        await writeFilePromise(braveFiltersPath, filtersBody, {encoding: "utf8"});
+    } catch (e) {
+        return Promise.resolve({error: "Invalid filter list at " + args.filtersUrl});
     }
 
-    fs.chmodSync(chromeBinaryPath, 0o777);
-
-    let braveFiltersPath = path.join(__dirname, "resources", "easylist.txt");
-    const customFiltersUrl = contextArgs.filters_url;
-    if (customFiltersUrl !== undefined) {
-        braveFiltersPath = path.join("/tmp", "abp-filters.txt");
-        debugMessage("Fetching filter rules from '" + customFiltersUrl + "'");
-        let filtersRequest = request("GET", customFiltersUrl);
-        fs.writeFileSync(braveFiltersPath, filtersRequest.getBody());
-        filtersRequest = undefined;
-    }
-
-    const args = {
-        url: contextArgs.url,
-        filters: braveFiltersPath,
-        seconds: contextArgs.secs || 5,
-        chromedriver: chromeDriverBinaryPath,
-        chromium: chromeBinaryPath,
-    };
-
-    const optionalCrawlArgs = {
-        seconds: args.seconds,
+    const optionalArgs = {
+        seconds: secs || 5,
         debug,
     };
 
-    debugMessage({args, optionalCrawlArgs});
+    const braveFiltersText = await readFilePromise(braveFiltersPath, {encoding: "utf8"});
+    
+    debugMessage("Starting crawl with configuration: ");
+    debugMessage({
+        url: args.url,
+        filtersTextLen: braveFiltersText.length,
+        chromeHeadlessBinaryPath,
+        chromeDriverBinaryPath,
+        optionalArgs,
+    });
+    const logs = await crawler.crawlPromise(args.url, braveFiltersText, chromeHeadlessBinaryPath, chromeDriverBinaryPath, optionalArgs);
 
-    const hostname = (new urlLib.URL(args.url)).hostname;
+    debugMessage("Finished crawl, about to record in DB.");
+    const crawlId = await db.record(args.url, secs, args.filtersUrl, braveFiltersText, logs, debug);
 
-    crawler.crawlPromise(args.url, args.filters, args.chromium, args.chromedriver, optionalCrawlArgs)
-        .then(logs => {
-            const summary = {
-                date: Date.now
-            };
-            fs.writeFileSync("/tmp-output/log.json", JSON.stringify(logs));
-        });
+    debugMessage("Finished recording crawl id: " + crawlId);
+    return {
+        logs,
+        url: args.url,
+        dwellTime: secs,
+        filtersUrl: args.filtersUrl,
+    };
 };
 
-module.exports.crawl = crawl;
+module.exports.dispatch = dispatch;

@@ -1,0 +1,11 @@
+// Populate this file with your secrets and rename it "config.js"
+"use strict";
+
+module.exports = {
+    pg: {
+        host: undefined,
+        username: undefined,
+        password: undefined,
+        port: undefined,
+    },
+};
