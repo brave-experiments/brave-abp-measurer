@@ -6,6 +6,11 @@ const util = require("util");
 const AdmZip = require("adm-zip");
 const rp = require("request-promise");
 const fs = require("fs-extra");
+const awsSdk = require("aws-sdk");
+// This is a bananas requirement for what we use it for,
+// but its already a dependency of another package,
+// so we can depend on it for "free".
+const lodash = require("lodash");
 
 const crawler = require("./lib/crawl");
 const db = require("./lib/db");
@@ -78,6 +83,7 @@ async function cleanTempDir () {
 };
 
 const dispatch = (event, context) => {
+    console.log(JSON.stringify(event, context));
     let promise;
     if (event.Records !== undefined) {
         const args = utils.dynamoRecordsToArgs(event.Records);
@@ -92,11 +98,15 @@ const dispatch = (event, context) => {
 /**
  * Required arguments:
  *   url {string}
+ *   filtersUrl {string}
  *
  * Optional arguments:
- *   debug {boolean} (default: false)
- *   filtersUrl {string}
- *   secs {int} (default: 5)
+ *   debug {?boolean} (default: false)
+ *   secs {?int} (default: 5)
+ *   breath {?int} (default: 0)
+ *   depth {?int} (default: 0)
+ *   parentCrawlId {?int} (default: null)
+ *   metadata {?object} (default: null)
  *
  * Either local must be a string, or filtersUrl must be an string
  */
@@ -105,6 +115,13 @@ async function crawlPromise (args) {
     const debug = args.debug === true;
     const headless = args.headless === undefined ? true : args.headless;
     const secs = args.secs || 5;
+    const depth = args.depth || 0;
+    const breath = args.breath || 0;
+    const parentCrawlId = args.parentCrawlId || null;
+    const metadata = args.metadata || {};
+
+    metadata.depth = depth;
+    metadata.breath = breath;
 
     debugMessage = msg => {
         if (debug === true) {
@@ -153,6 +170,7 @@ async function crawlPromise (args) {
     const optionalArgs = {
         seconds: secs || 5,
         debug,
+        fetchChildLinks: depth > 0,
     };
 
     const braveFiltersText = await readFilePromise(braveFiltersPath, {encoding: "utf8"});
@@ -165,10 +183,42 @@ async function crawlPromise (args) {
         chromeDriverBinaryPath,
         optionalArgs,
     });
-    const logs = await crawler.crawlPromise(args.url, braveFiltersText, chromeHeadlessBinaryPath, chromeDriverBinaryPath, optionalArgs);
+    const [logs, childHrefs] = await crawler.crawlPromise(args.url, braveFiltersText, chromeHeadlessBinaryPath, chromeDriverBinaryPath, optionalArgs);
 
     debugMessage("Finished crawl, about to record in DB.");
-    const crawlId = await db.record(args.url, secs, args.filtersUrl, braveFiltersText, logs, debug);
+    const crawlId = await db.record(args.url, secs, args.filtersUrl, braveFiltersText, logs, debug, parentCrawlId, metadata);
+
+    if (depth > 0 &&
+        breath > 0 &&
+        childHrefs !== undefined &&
+        childHrefs.length > 0) {
+        const childUrlsToCrawl = lodash.sampleSize(childHrefs, breath);
+        debugMessage(`Will also crawl children ${JSON.stringify(childUrlsToCrawl)}.`);
+        const lambdaClient = new awsSdk.Lambda({apiVersion: '2015-03-31'});
+        childUrlsToCrawl.forEach(aUrl => {
+            const childArgs = Object.assign({}, args);
+            childArgs.depth -= 1;
+            childArgs.parentCrawlId = crawlId;
+
+            const childCallParams = {
+                ClientContext: {
+                    url: args.url,
+                    depth,
+                    breath,
+                },
+                FunctionName: "brave-abp-measurer",
+                InvocationType: "Event",
+                Payload: childArgs,
+            }
+            lambdaClient.invoke(childCallParams, (invokeErr, invokeData) => {
+                if (invokeErr) {
+                    debugMessage(invokeErr);
+                } else {
+                    debugMessage(invokeData);
+                }
+            });
+        });
+    }
 
     debugMessage("Finished recording crawl id: " + crawlId);
     return {
@@ -176,6 +226,7 @@ async function crawlPromise (args) {
         url: args.url,
         dwellTime: secs,
         filtersUrl: args.filtersUrl,
+        depth,
     };
 };
 
