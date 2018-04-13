@@ -20,16 +20,21 @@ const chromeUrl = "https://s3.amazonaws.com/com.brave.research.crawls.resources/
 const chromeDriverUrl = "https://chromedriver.storage.googleapis.com/2.37/chromedriver_linux64.zip";
 const chromeHeadlessUrl = "https://github.com/adieuadieu/serverless-chrome/releases/download/v1.0.0-38/stable-headless-chromium-amazonlinux-2017-03.zip";
 
+const localResourcesDir = path.join(__dirname, "resources");
+const localChromeDriverPath = path.join(localResourcesDir, "chromedriver.zip");
+const localChromeHeadlessPath = path.join(localResourcesDir, "chromium_headless.zip");
+
 const zippedChromeDriverPath = path.join("/tmp", "chromedriver.zip");
 const unzippedChromeDriverPath = path.join("/tmp", "chromedriver");
 const chromeDriverBinaryPath = path.join(unzippedChromeDriverPath, "chromedriver");
 
-const zippedChromeHeadlessPath = path.join("/tmp", "stable-headless-chromium-amazonlinux-2017-03.zip");
+const zippedChromeHeadlessPath = path.join("/tmp", "chromium_headless.zip");
 const unzippedChromeHeadlessPath = path.join("/tmp", "headless-chromium");
 const chromeHeadlessBinaryPath = path.join(unzippedChromeHeadlessPath, "headless-chromium");
 
 const braveFiltersPath = path.join("/tmp", "abp-filters.txt");
 
+const copyFilePromise = util.promisify(fs.copyFile);
 const writeFilePromise = util.promisify(fs.writeFile);
 const readFilePromise = util.promisify(fs.readFile);
 const existsPromise = util.promisify(fs.pathExists);
@@ -59,9 +64,7 @@ let debugMessage;
 async function cleanTempDir () {
 
     debugMessage("Cleaning up...");
-
     const cleanedDirs = [];
-
     for (let tempPath of possibleTempFiles) {
         if (await existsPromise(tempPath)) {
             debugMessage("Removing: " + tempPath);
@@ -83,7 +86,6 @@ async function cleanTempDir () {
 };
 
 const dispatch = (event, context) => {
-    console.log(JSON.stringify(event, context));
     let promise;
     if (event.Records !== undefined) {
         const args = utils.dynamoRecordsToArgs(event.Records);
@@ -92,7 +94,12 @@ const dispatch = (event, context) => {
         promise = crawlPromise(event);
     }
 
-    promise.then(cleanTempDir).catch(cleanTempDir);
+    return promise
+        .then(cleanTempDir)
+        .catch(error => {
+            console.log(error);
+            return cleanTempDir();
+        });
 };
 
 /**
@@ -129,18 +136,28 @@ async function crawlPromise (args) {
         }
     };
 
-    debugMessage("Downloading chromedriver from: " + chromeDriverUrl);
-    if (await existsPromise(zippedChromeDriverPath) !== true) {
-        let zippedChromeDriverBody = await rp({url: chromeDriverUrl, encoding: null, method: "GET"});
-        await writeFilePromise(zippedChromeDriverPath, zippedChromeDriverBody);
-        zippedChromeDriverBody = undefined;
+    if (await existsPromise(localChromeDriverPath)) {
+        debugMessage("Using packaged version of chromedriver at: " + localChromeDriverPath);
+        await copyFilePromise(localChromeDriverPath, zippedChromeDriverPath);
+    } else {
+        debugMessage("Downloading chromedriver from: " + chromeDriverUrl);
+        if (await existsPromise(zippedChromeDriverPath) !== true) {
+            let zippedChromeDriverBody = await rp({url: chromeDriverUrl, encoding: null, method: "GET"});
+            await writeFilePromise(zippedChromeDriverPath, zippedChromeDriverBody);
+            zippedChromeDriverBody = undefined;
+        }
     }
 
-    debugMessage("Downloading chrome-headless from: " + chromeHeadlessUrl);
-    if (await existsPromise(zippedChromeHeadlessPath) !== true) {
-        let zippedChromeHeadlessBody = await rp({url: chromeHeadlessUrl, encoding: null, method: "GET"});
-        await writeFilePromise(zippedChromeHeadlessPath, zippedChromeHeadlessBody);
-        zippedChromeHeadlessBody = undefined;
+    if (await existsPromise(localChromeHeadlessPath)) {
+        debugMessage("Using packaged version of chrome headless at: " + localChromeHeadlessPath);
+        await copyFilePromise(localChromeHeadlessPath, zippedChromeHeadlessPath);
+    } else {
+        debugMessage("Downloading chrome-headless from: " + chromeHeadlessUrl);
+        if (await existsPromise(zippedChromeHeadlessPath) !== true) {
+            let zippedChromeHeadlessBody = await rp({url: chromeHeadlessUrl, encoding: null, method: "GET"});
+            await writeFilePromise(zippedChromeHeadlessPath, zippedChromeHeadlessBody);
+            zippedChromeHeadlessBody = undefined;
+        }
     }
 
     debugMessage("Unzipping chromedriver to " + unzippedChromeDriverPath);
@@ -182,21 +199,26 @@ async function crawlPromise (args) {
         chromeHeadlessBinaryPath,
         chromeDriverBinaryPath,
         optionalArgs,
+        depth,
+        breath,
     });
     const [logs, childHrefs] = await crawler.crawlPromise(args.url, braveFiltersText, chromeHeadlessBinaryPath, chromeDriverBinaryPath, optionalArgs);
 
     debugMessage("Finished crawl, about to record in DB.");
     const crawlId = await db.record(args.url, secs, args.filtersUrl, braveFiltersText, logs, debug, parentCrawlId, metadata);
+    debugMessage(`Finished recording crawl ${crawlId} in the database, now considering recursive calls.`);
 
     if (depth > 0 &&
         breath > 0 &&
         childHrefs !== undefined &&
         childHrefs.length > 0) {
         const childUrlsToCrawl = lodash.sampleSize(childHrefs, breath);
+
         debugMessage(`Will also crawl children ${JSON.stringify(childUrlsToCrawl)}.`);
         const lambdaClient = new awsSdk.Lambda({apiVersion: '2015-03-31'});
         childUrlsToCrawl.forEach(aUrl => {
             const childArgs = Object.assign({}, args);
+            childArgs.url = aUrl;
             childArgs.depth -= 1;
             childArgs.parentCrawlId = crawlId;
 
@@ -209,7 +231,12 @@ async function crawlPromise (args) {
                 FunctionName: "brave-abp-measurer",
                 InvocationType: "Event",
                 Payload: childArgs,
-            }
+            };
+            debugMessage(`Calling ${childCallParams.FunctionName} with args ${JSON.stringify(childCallParams)}.`);
+
+            childCallParams.ClientContext = JSON.stringify(childCallParams.ClientContext);
+            childCallParams.Payload = JSON.stringify(childCallParams.Payload);
+
             lambdaClient.invoke(childCallParams, (invokeErr, invokeData) => {
                 if (invokeErr) {
                     debugMessage(invokeErr);
@@ -220,7 +247,7 @@ async function crawlPromise (args) {
         });
     }
 
-    debugMessage("Finished recording crawl id: " + crawlId);
+    debugMessage("Finished crawl id: " + crawlId);
     return {
         logs,
         url: args.url,
