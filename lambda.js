@@ -96,6 +96,8 @@ const dispatch = (event, _) => {
  *   rank {?int} (default: null)
  */
 async function crawlPromise (args) {
+    utils.validateArgs(args);
+
     const filtersUrl = args.filtersUrl;
     const batch = args.batch;
     const domain = args.domain;
@@ -182,7 +184,7 @@ async function crawlPromise (args) {
 
             const childCallParams = {
                 ClientContext: {
-                    url: args.url,
+                    url: url,
                     depth,
                     breath,
                 },
