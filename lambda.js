@@ -16,10 +16,10 @@ const db = require("./lib/db");
 const utils = require("./lib/utils");
 
 const localResourcesDir = path.join(__dirname, "resources");
-const localChromeDriverPath = path.join(localResourcesDir, "chromedriver");
-const localChromeHeadlessPath = path.join(localResourcesDir, "headless-chromium");
+const chromeDriverPath = path.join(localResourcesDir, "chromedriver");
+const chromeHeadlessPath = path.join(localResourcesDir, "headless-chromium");
 
-const braveFiltersPath = path.join("/tmp", "abp-filters.txt");
+const filtersPath = path.join("/tmp", "abp-filters.txt");
 
 const writeFilePromise = util.promisify(fs.writeFile);
 const readFilePromise = util.promisify(fs.readFile);
@@ -29,7 +29,7 @@ const emptyDirPromise = util.promisify(fs.emptyDir);
 const rmdirPromise = util.promisify(fs.rmdir);
 
 const possibleTempFiles = [
-    braveFiltersPath,
+    filtersPath,
 ];
 
 const possibleTempDirs = [
@@ -81,24 +81,33 @@ const dispatch = (event, _) => {
 
 /**
  * Required arguments:
- *   url {string}
  *   filtersUrl {string}
+ *   batch {uuid string}
+ *   domain {string}
  *
  * Optional arguments:
+ *   url {?string} (default: http:// + domain)
  *   debug {?boolean} (default: false)
  *   secs {?int} (default: 5)
  *   breath {?int} (default: 0)
  *   depth {?int} (default: 0)
  *   parentCrawlId {?int} (default: null)
  *   tags {?array<string>} (default: null)
+ *   rank {?int} (default: null)
  */
 async function crawlPromise (args) {
+    const filtersUrl = args.filtersUrl;
+    const batch = args.batch;
+    const domain = args.domain;
+
+    const url = args.url || `http://${domain}`;
     const debug = args.debug === true;
     const secs = args.secs || 5;
     const depth = args.depth || 1;
     const breath = args.breath || 0;
     const parentCrawlId = args.parentCrawlId || null;
     const tags = args.tags || [];
+    const rank = args.rank || null;
 
     DEBUG_MESSAGE = msg => {
         if (debug === true) {
@@ -106,12 +115,22 @@ async function crawlPromise (args) {
         }
     };
 
-    DEBUG_MESSAGE("Fetching filter rules from '" + args.filtersUrl + "'");
+    if (parentCrawlId === null) {
+        try {
+            await rp(url);
+        } catch (_) {
+            await db.recordUnavailabeDomain(batch, domain, rank, tags);
+            DEBUG_MESSAGE(`URL ${url} appears to be unreachable.`);
+            return;
+        }
+    }
+
+    DEBUG_MESSAGE("Fetching filter rules from '" + filtersUrl + "'");
     try {
-        const filtersBody = await rp.get(args.filtersUrl);
-        await writeFilePromise(braveFiltersPath, filtersBody, {encoding: "utf8"});
+        const filtersBody = await rp.get(filtersUrl);
+        await writeFilePromise(filtersPath, filtersBody, {encoding: "utf8"});
     } catch (e) {
-        return Promise.resolve({error: "Invalid filter list at " + args.filtersUrl});
+        return Promise.resolve({error: "Invalid filter list at " + filtersUrl});
     }
 
     const optionalArgs = {
@@ -120,27 +139,30 @@ async function crawlPromise (args) {
         fetchChildLinks: depth > 1,
     };
 
-    const braveFiltersText = await readFilePromise(braveFiltersPath, {encoding: "utf8"});
+    const filtersText = await readFilePromise(filtersPath, {encoding: "utf8"});
 
     DEBUG_MESSAGE("Starting crawl with configuration: ");
     DEBUG_MESSAGE({
-        url: args.url,
-        filtersTextLen: braveFiltersText.length,
-        localChromeHeadlessPath,
-        localChromeDriverPath,
+        batch,
+        url,
+        domain,
+        filtersTextLen: filtersText.length,
+        chromeHeadlessPath,
+        chromeDriverPath,
         optionalArgs,
+        rank,
         depth,
         breath,
     });
     const [logs, childHrefs] = await crawler.crawlPromise(
-        args.url, braveFiltersText,
-        localChromeHeadlessPath, localChromeDriverPath, optionalArgs
+        url, filtersText,
+        chromeHeadlessPath, chromeDriverPath, optionalArgs
     );
 
     DEBUG_MESSAGE("Finished crawl, about to record in DB.");
     const crawlId = await db.record(
-        args.url, secs, args.filtersUrl, braveFiltersText,
-        logs, depth, breath, tags, parentCrawlId, debug
+        batch, domain, url, secs, filtersUrl, filtersText,
+        logs, depth, breath, tags, parentCrawlId, rank, debug
     );
     DEBUG_MESSAGE(`Finished recording crawl ${crawlId} in the database, now considering recursive calls.`);
 
@@ -182,9 +204,9 @@ async function crawlPromise (args) {
     DEBUG_MESSAGE("Finished crawl id: " + crawlId);
     return {
         logs,
-        url: args.url,
+        url: url,
         dwellTime: secs,
-        filtersUrl: args.filtersUrl,
+        filtersUrl: filtersUrl,
         depth,
     };
 }
