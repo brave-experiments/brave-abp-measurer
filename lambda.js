@@ -19,18 +19,9 @@ const localResourcesDir = path.join(__dirname, "resources");
 const chromeDriverPath = path.join(localResourcesDir, "chromedriver");
 const chromeHeadlessPath = path.join(localResourcesDir, "headless-chromium");
 
-const filtersPath = path.join("/tmp", "abp-filters.txt");
-
-const writeFilePromise = util.promisify(fs.writeFile);
-const readFilePromise = util.promisify(fs.readFile);
 const existsPromise = util.promisify(fs.pathExists);
-const unlinkPromise = util.promisify(fs.unlink);
 const emptyDirPromise = util.promisify(fs.emptyDir);
 const rmdirPromise = util.promisify(fs.rmdir);
-
-const possibleTempFiles = [
-    filtersPath,
-];
 
 const possibleTempDirs = [
     "/tmp/data-path",
@@ -42,14 +33,6 @@ let DEBUG_MESSAGE;
 async function cleanTempDir () {
     DEBUG_MESSAGE("Cleaning up...");
     const cleanedDirs = [];
-    for (const tempPath of possibleTempFiles) {
-        if (await existsPromise(tempPath)) {
-            DEBUG_MESSAGE("Removing: " + tempPath);
-            await unlinkPromise(tempPath);
-            cleanedDirs.push(tempPath);
-        }
-    }
-
     for (const tempPath of possibleTempDirs) {
         if (await existsPromise(tempPath)) {
             DEBUG_MESSAGE("Removing: " + tempPath);
@@ -81,7 +64,7 @@ const dispatch = (event, _) => {
 
 /**
  * Required arguments:
- *   filtersUrl {string}
+ *   filtersUrls {array<string>}
  *   batch {uuid string}
  *   domain {string}
  *
@@ -96,9 +79,7 @@ const dispatch = (event, _) => {
  *   rank {?int} (default: null)
  */
 async function crawlPromise (args) {
-    utils.validateArgs(args);
-
-    const filtersUrl = args.filtersUrl;
+    const filtersUrls = args.filtersUrls;
     const batch = args.batch;
     const domain = args.domain;
 
@@ -116,6 +97,7 @@ async function crawlPromise (args) {
             console.log("lambda handler: " + JSON.stringify(msg));
         }
     };
+    utils.validateArgs(args);
 
     if (parentCrawlId === null) {
         try {
@@ -127,43 +109,42 @@ async function crawlPromise (args) {
         }
     }
 
-    DEBUG_MESSAGE("Fetching filter rules from '" + filtersUrl + "'");
-    try {
-        const filtersBody = await rp.get(filtersUrl);
-        await writeFilePromise(filtersPath, filtersBody, {encoding: "utf8"});
-    } catch (e) {
-        return Promise.resolve({error: "Invalid filter list at " + filtersUrl});
+    const filterUrlToTextMap = Object.create(null);
+    DEBUG_MESSAGE("Found " + filtersUrls.length + " urls of filter rules to download.");
+    for (const aFilterUrl of filtersUrls) {
+        DEBUG_MESSAGE("Fetching filter rules from '" + aFilterUrl + "'");
+        try {
+            const fetchedFilterText = await rp.get(aFilterUrl);
+            filterUrlToTextMap[aFilterUrl] = fetchedFilterText;
+        } catch (e) {
+            return Promise.resolve({error: "Invalid filter list at " + aFilterUrl});
+        }
     }
 
-    const optionalArgs = {
-        seconds: secs || 5,
-        debug,
-        fetchChildLinks: depth > 1,
-    };
-
-    const filtersText = await readFilePromise(filtersPath, {encoding: "utf8"});
 
     DEBUG_MESSAGE("Starting crawl with configuration: ");
     DEBUG_MESSAGE({
+        filtersUrls,
         batch,
         url,
         domain,
-        filtersTextLen: filtersText.length,
         chromeHeadlessPath,
         chromeDriverPath,
-        optionalArgs,
+        secs,
         rank,
         depth,
         breath,
     });
+
+    const shouldFetchChildLinks = depth > 1;
     const [logs, childHrefs] = await crawler.crawlPromise(
-        url, filtersText,
-        chromeHeadlessPath, chromeDriverPath, optionalArgs
+        url, filterUrlToTextMap, chromeHeadlessPath, chromeDriverPath,
+        secs, shouldFetchChildLinks, debug
     );
 
     DEBUG_MESSAGE("Finished crawl, about to record in DB.");
     const crawlId = await db.record(
-        batch, domain, url, secs, filtersUrl, filtersText,
+        batch, domain, url, secs, filterUrlToTextMap,
         logs, depth, breath, tags, parentCrawlId, rank, debug
     );
     DEBUG_MESSAGE(`Finished recording crawl ${crawlId} in the database, now considering recursive calls.`);
@@ -208,7 +189,7 @@ async function crawlPromise (args) {
         logs,
         url: url,
         dwellTime: secs,
-        filtersUrl: filtersUrl,
+        filterUrlToTextMap,
         depth,
     };
 }
