@@ -45,14 +45,8 @@ async function cleanTempDir () {
     return Promise.resolve(cleanedDirs);
 }
 
-const dispatch = (event, _) => {
-    let promise;
-    if (event.Records !== undefined) {
-        const args = utils.dynamoRecordsToArgs(event.Records);
-        promise = Promise.all(args.map(crawlPromise));
-    } else {
-        promise = crawlPromise(event);
-    }
+const dispatch = lambdaEvent => {
+    const promise = crawlPromise(lambdaEvent);
 
     return promise
         .then(cleanTempDir)
@@ -69,6 +63,7 @@ const dispatch = (event, _) => {
  *   domain {string}
  *
  * Optional arguments:
+ *   region {?string} (default: null)
  *   url {?string} (default: http:// + domain)
  *   debug {?boolean} (default: false)
  *   secs {?int} (default: 5)
@@ -91,19 +86,21 @@ async function crawlPromise (args) {
     const parentCrawlId = args.parentCrawlId || null;
     const tags = args.tags || [];
     const rank = args.rank || null;
+    const region = args.region || null;
 
     DEBUG_MESSAGE = msg => {
         if (debug === true) {
             console.log("lambda handler: " + JSON.stringify(msg));
         }
     };
+    DEBUG_MESSAGE(args);
     utils.validateArgs(args);
 
     if (parentCrawlId === null) {
         try {
             await rp(url);
         } catch (_) {
-            await db.recordUnavailabeDomain(batch, domain, rank, tags);
+            await db.recordUnavailabeDomain(batch, domain, rank, tags, region);
             DEBUG_MESSAGE(`URL ${url} appears to be unreachable.`);
             return;
         }
@@ -121,21 +118,6 @@ async function crawlPromise (args) {
         }
     }
 
-
-    DEBUG_MESSAGE("Starting crawl with configuration: ");
-    DEBUG_MESSAGE({
-        filtersUrls,
-        batch,
-        url,
-        domain,
-        chromeHeadlessPath,
-        chromeDriverPath,
-        secs,
-        rank,
-        depth,
-        breath,
-    });
-
     const shouldFetchChildLinks = depth > 1;
     const [logs, childHrefs] = await crawler.crawlPromise(
         url, filterUrlToTextMap, chromeHeadlessPath, chromeDriverPath,
@@ -145,7 +127,7 @@ async function crawlPromise (args) {
     DEBUG_MESSAGE("Finished crawl, about to record in DB.");
     const crawlId = await db.record(
         batch, domain, url, secs, filterUrlToTextMap,
-        logs, depth, breath, tags, parentCrawlId, rank, debug
+        logs, depth, breath, tags, parentCrawlId, rank, region, debug
     );
     DEBUG_MESSAGE(`Finished recording crawl ${crawlId} in the database, now considering recursive calls.`);
 
