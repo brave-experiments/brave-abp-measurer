@@ -99,7 +99,7 @@ async function crawlPromise (args) {
         try {
             await rp(url);
         } catch (_) {
-            await db.recordUnavailabeDomain(batch, domain, rank, tags, region);
+            await db.recordUnavailabeDomain(batch, domain, rank, tags, region, debug);
             DEBUG_MESSAGE(`URL ${url} appears to be unreachable.`);
             return;
         }
