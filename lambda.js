@@ -42,18 +42,17 @@ async function cleanTempDir () {
         }
     }
 
-    return Promise.resolve(cleanedDirs);
+    return cleanedDirs;
 }
 
-const dispatch = lambdaEvent => {
-    const promise = crawlPromise(lambdaEvent);
-
-    return promise
-        .then(cleanTempDir)
-        .catch(error => {
-            console.log(error);
-            return cleanTempDir();
-        });
+const dispatch = async lambdaEvent => {
+    try {
+        await crawlPromise(lambdaEvent);
+        await cleanTempDir();
+    } catch (error) {
+        console.log(error);
+        await cleanTempDir();
+    }
 };
 
 /**
