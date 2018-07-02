@@ -26,7 +26,7 @@ lambda: clean
 	rm -Rf $(TMP_WORKSPACE)/node_modules/core-js/stage;
 	rm -Rf $(TMP_WORKSPACE)/node_modules/nan;
 	find $(TMP_WORKSPACE)/node_modules -type f -name "*.md" -delete;
-	find $(TMP_WORKSPACE)/node_modules -type d -name "test" -delete;
+	find $(TMP_WORKSPACE)/node_modules -type d -name "test" | xargs rm -Rf;
 	rm $(TMP_WORKSPACE)/Makefile;
 	rm $(TMP_WORKSPACE)/*.json;
 	mkdir $(TMP_WORKSPACE)/resources/;
