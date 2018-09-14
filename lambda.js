@@ -47,8 +47,19 @@ async function cleanTempDir () {
 
 const dispatch = async lambdaEvent => {
     try {
-        await crawlPromise(lambdaEvent);
-        await cleanTempDir();
+        if (lambdaEvent.Records) {
+            // Check to see if we're receiving data from SQS
+            for (const args of lambdaEvent.Records) {
+                const processedLambdaArgs = JSON.parse(args.body);
+                await crawlPromise(processedLambdaArgs);
+                await cleanTempDir();
+            }
+        } else {
+            // Otherwise, handle some other invocation style (likely
+            // comandline or direct invocation)
+            await crawlPromise(lambdaEvent);
+            await cleanTempDir();
+        }
     } catch (error) {
         console.log(error);
         await cleanTempDir();
