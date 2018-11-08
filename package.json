@@ -11,7 +11,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "ad-block": "git+https://www.github.com/snyderp/ad-block#2b08c3b",
+    "ad-block": "^4.1.1",
     "aws-sdk": "^2.224.1",
     "fs-extra": "^5.0.0",
     "lodash": "^4.17.5",
