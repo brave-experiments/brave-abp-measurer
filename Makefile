@@ -15,10 +15,10 @@ clean:
 install:
 	npm install
 
-build-lambda:
-	docker run --rm -v $(PWD):/var/task lambci/lambda:build-nodejs8.10 npm install
+install-lambda:
+	docker run --rm -v $(PWD):/var/task lambci/lambda:build-nodejs8.10
 
-build: clean install
+build: clean install-lambda
 	mkdir -p $(TMP_WORKSPACE)/resources/
 	cp -r lib node_modules index.js $(TMP_WORKSPACE)/
 	rm -rf $(TMP_WORKSPACE)/node_modules/aws-sdk
