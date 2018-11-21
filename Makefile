@@ -10,13 +10,16 @@ FUNCTION_NAME=brave-abp-measurer
 FUNCTION_S3_BUCKET=abp-lambda-funcs20181108171253015900000002
 
 clean:
-	rm -rf $(TMP_WORKSPACE)/
+	rm -rf $(TMP_WORKSPACE)
 
 install:
 	npm install
 
 install-lambda:
 	docker run --rm -v $(PWD):/var/task lambci/lambda:build-nodejs8.10
+
+lite-build:
+	cp -r lib index.js $(TMP_WORKSPACE)
 
 build: clean install-lambda
 	mkdir -p $(TMP_WORKSPACE)/resources/
@@ -49,9 +52,15 @@ build: clean install-lambda
 	cd $(TMP_WORKSPACE)/ && zip -r $(FUNCTION_NAME).zip *
 
 test:
-	docker run -e AWS_ACCESS_KEY_ID=$(AWS_ACCESS_KEY_ID) -e AWS_SECRET_ACCESS_KEY=$(AWS_SECRET_ACCESS_KEY) -e AWS_REGION=$(AWS_REGION) \
-		-e PG_HOSTNAME="" -e PG_PORT=5432 -e PG_USERNAME="abp" -e PG_PASSWORD="" -it -v $(PWD)/$(TMP_WORKSPACE):/var/task lambci/lambda:nodejs8.10 index.dispatch '{"filtersUrls": ["https://easylist.to/easylist/easylist.txt", "https://easylist.to/easylist/easyprivacy.txt"], "batch": "1", "domain": "www.cnn.com", "rank": 8, "debug": "True", "depth": 2, "breath": 3, "tags": [], "region": "global"}'
-	# docker run -it -v $TMP_DIR:/var/task lambci/lambda:nodejs8.10 lambda.dispatch '{"domain": "www.cnn.com","debug": true,"filtersUrls": [ "https://easylist.to/easylist/easylist.txt", "https://easylist.to/easylist/easyprivacy.txt", "https://raw.githubusercontent.com/brave/adblock-lists/master/ublock-unbreak.txt", "https://raw.githubusercontent.com/brave/adblock-lists/master/brave-unbreak.txt", "https://raw.githubusercontent.com/brave/adblock-lists/master/coin-miners.txt"], "tags": [ "docker-test" ], "batch": "1f366690-6e84-4a2b-b200-8e37b8c9d24a" }'
+	docker run -e AWS_ACCESS_KEY_ID=$(AWS_ACCESS_KEY_ID) -e AWS_SECRET_ACCESS_KEY=$(AWS_SECRET_ACCESS_KEY) \
+		-e AWS_REGION=$(AWS_REGION) -e PG_HOSTNAME="$(PG_HOSTNAME)" -e PG_PORT=5432 -e PG_USERNAME="abp" \
+		-e PG_PASSWORD="$(PG_PASSWORD)" -it -v $(PWD)/$(TMP_WORKSPACE):/var/task lambci/lambda:nodejs8.10 index.dispatch \
+		'{"filtersUrls": [ "https://easylist.to/easylist/easylist.txt", "https://easylist.to/easylist/easyprivacy.txt", \
+		"https://raw.githubusercontent.com/brave/adblock-lists/master/ublock-unbreak.txt", \
+		"https://raw.githubusercontent.com/brave/adblock-lists/master/brave-unbreak.txt", \
+		"https://raw.githubusercontent.com/brave/adblock-lists/master/coin-miners.txt"], \
+		"batch": "1f366690-6e84-4a2b-b200-8e37b8c9d24a", "domain": "www.cnn.com", "rank": 8, "debug": true, "depth": 2, \
+		"breath": 3, "tags": [], "region": "global"}'
 
 deploy:
 	aws s3 cp $(TMP_WORKSPACE)/$(FUNCTION_NAME).zip s3://$(FUNCTION_S3_BUCKET)/$(FUNCTION_NAME).zip
