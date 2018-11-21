@@ -7,7 +7,7 @@ CHROME_DRIVER_URL := https://chromedriver.storage.googleapis.com/2.37/chromedriv
 CHROME_HEADLESS_URL := https://github.com/adieuadieu/serverless-chrome/releases/download/v1.0.0-38/stable-headless-chromium-amazonlinux-2017-03.zip
 
 FUNCTION_NAME=brave-abp-measurer
-FUNCTION_S3_BUCKET=abp-lambda-funcs20181108171253015900000002
+FUNCTION_S3_BUCKET=abp-lambda-funcs20181113170947211800000001
 
 clean:
 	rm -rf $(TMP_WORKSPACE)
