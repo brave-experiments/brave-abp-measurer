@@ -149,7 +149,7 @@ async function crawlPromise (args) {
 
         DEBUG_MESSAGE(`Will also crawl children ${JSON.stringify(childUrlsToCrawl)}.`);
         const lambdaClient = new awsSdk.Lambda({apiVersion: "2015-03-31"});
-        childUrlsToCrawl.forEach(aUrl => {
+        for (const aUrl of childUrlsToCrawl) {
             const childArgs = Object.assign({}, args);
             childArgs.url = aUrl;
             childArgs.depth -= 1;
@@ -170,10 +170,8 @@ async function crawlPromise (args) {
             childCallParams.ClientContext = JSON.stringify(childCallParams.ClientContext);
             childCallParams.Payload = JSON.stringify(childCallParams.Payload);
 
-            lambdaClient.invoke(childCallParams, (invokeErr, invokeData) => {
-                DEBUG_MESSAGE(invokeErr || invokeData);
-            });
-        });
+            await lambdaClient.invoke(childCallParams);
+        }
     }
 
     DEBUG_MESSAGE("Finished crawl id: " + crawlId);
