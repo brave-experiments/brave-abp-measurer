@@ -14,6 +14,7 @@ const lodash = require("lodash");
 const crawler = require("./lib/crawl");
 const db = require("./lib/db");
 const utils = require("./lib/utils");
+const debugLib = require("./lib/debug");
 
 const localResourcesDir = path.join(__dirname, "resources");
 const chromeDriverPath = path.join(localResourcesDir, "chromedriver");
@@ -28,14 +29,12 @@ const possibleTempDirs = [
     "/tmp/cache-dir",
 ];
 
-let DEBUG_MESSAGE;
-
 async function cleanTempDir () {
-    DEBUG_MESSAGE("Cleaning up...");
+    debugLib.log("Cleaning up...");
     const cleanedDirs = [];
     for (const tempPath of possibleTempDirs) {
         if (await existsPromise(tempPath)) {
-            DEBUG_MESSAGE("Removing: " + tempPath);
+            debugLib.log("Removing: " + tempPath);
             await emptyDirPromise(tempPath);
             await rmdirPromise(tempPath);
             cleanedDirs.push(tempPath);
@@ -56,7 +55,7 @@ const dispatch = async lambdaEvent => {
             }
         } else {
             // Otherwise, handle some other invocation style (likely
-            // comandline or direct invocation)
+            // commanding or direct invocation)
             await crawlPromise(lambdaEvent);
             await cleanTempDir();
         }
@@ -75,7 +74,6 @@ const dispatch = async lambdaEvent => {
  * Optional arguments:
  *   region {?string} (default: null)
  *   url {?string} (default: http:// + domain)
- *   debug {?boolean} (default: false)
  *   secs {?int} (default: 5)
  *   breath {?int} (default: 0)
  *   depth {?int} (default: 0)
@@ -89,7 +87,6 @@ async function crawlPromise (args) {
     const domain = args.domain;
 
     const url = args.url || `http://${domain}`;
-    const debug = args.debug === true;
     const secs = args.secs || 5;
     const depth = args.depth || 1;
     const breath = args.breath || 0;
@@ -98,28 +95,29 @@ async function crawlPromise (args) {
     const rank = args.rank || null;
     const region = args.region || null;
 
-    DEBUG_MESSAGE = msg => {
-        if (debug === true) {
-            console.log("lambda handler: " + JSON.stringify(msg));
-        }
-    };
-    DEBUG_MESSAGE(args);
+    debugLib.log(args);
     utils.validateArgs(args);
 
     if (parentCrawlId === null) {
         try {
-            await rp(url);
+            await rp({
+                url: url,
+                timeout: 10000,
+                headers: {
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.53 Safari/537.36",
+                },
+            });
         } catch (_) {
-            await db.recordUnavailabeDomain(batch, domain, rank, tags, region, debug);
-            DEBUG_MESSAGE(`URL ${url} appears to be unreachable.`);
+            debugLib.log(`URL ${url} appears to be unreachable.`);
+            await db.recordUnavailableDomain(batch, domain, rank, tags, region);
             return;
         }
     }
 
     const filterUrlToTextMap = Object.create(null);
-    DEBUG_MESSAGE("Found " + filtersUrls.length + " urls of filter rules to download.");
+    debugLib.log("Found " + filtersUrls.length + " urls of filter rules to download.");
     for (const aFilterUrl of filtersUrls) {
-        DEBUG_MESSAGE("Fetching filter rules from '" + aFilterUrl + "'");
+        debugLib.log("Fetching filter rules from '" + aFilterUrl + "'");
         try {
             const fetchedFilterText = await rp.get(aFilterUrl);
             filterUrlToTextMap[aFilterUrl] = fetchedFilterText;
@@ -131,15 +129,15 @@ async function crawlPromise (args) {
     const shouldFetchChildLinks = depth > 1;
     const [logs, childHrefs] = await crawler.crawlPromise(
         url, filterUrlToTextMap, chromeHeadlessPath, chromeDriverPath,
-        secs, shouldFetchChildLinks, debug
+        secs, shouldFetchChildLinks
     );
 
-    DEBUG_MESSAGE("Finished crawl, about to record in DB.");
+    debugLib.log("Finished crawl, about to record in DB.");
     const crawlId = await db.record(
         batch, domain, url, secs, filterUrlToTextMap,
-        logs, depth, breath, tags, parentCrawlId, rank, region, debug
+        logs, depth, breath, tags, parentCrawlId, rank, region
     );
-    DEBUG_MESSAGE(`Finished recording crawl ${crawlId} in the database, now considering recursive calls.`);
+    debugLib.log(`Finished recording crawl ${crawlId} in the database, now considering recursive calls.`);
 
     if (depth > 1 &&
         breath > 0 &&
@@ -147,7 +145,7 @@ async function crawlPromise (args) {
         childHrefs.length > 0) {
         const childUrlsToCrawl = lodash.sampleSize(childHrefs, breath);
 
-        DEBUG_MESSAGE(`Will also crawl children ${JSON.stringify(childUrlsToCrawl)}.`);
+        debugLib.log(`Will also crawl children ${JSON.stringify(childUrlsToCrawl)}.`);
         const lambdaClient = new awsSdk.Lambda({apiVersion: "2015-03-31"});
         for (const aUrl of childUrlsToCrawl) {
             const childArgs = Object.assign({}, args);
@@ -165,16 +163,16 @@ async function crawlPromise (args) {
                 InvocationType: "Event",
                 Payload: childArgs,
             };
-            DEBUG_MESSAGE(`Calling ${childCallParams.FunctionName} with args ${JSON.stringify(childCallParams)}.`);
+            debugLib.log(`Calling ${childCallParams.FunctionName} with args ${JSON.stringify(childCallParams)}.`);
 
             childCallParams.ClientContext = JSON.stringify(childCallParams.ClientContext);
             childCallParams.Payload = JSON.stringify(childCallParams.Payload);
 
-            await lambdaClient.invoke(childCallParams);
+            await lambdaClient.invoke(childCallParams).promise();
         }
     }
 
-    DEBUG_MESSAGE("Finished crawl id: " + crawlId);
+    debugLib.log("Finished crawl id: " + crawlId);
     return {
         logs,
         url: url,
