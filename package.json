@@ -1,14 +1,18 @@
 {
   "name": "brave-abp-measurer",
   "version": "1.0.0",
-  "description": "",
+  "description": "Lambda function for applying EasyList and similar lists to websites and recording the application results.",
   "main": "index.js",
   "scripts": {
     "bundle": "make build",
     "lint": "node node_modules/eslint/bin/eslint.js .",
     "lint:fix": "node node_modules/eslint/bin/eslint.js . --fix"
   },
-  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brave/brave-abp-measurer.git"
+  },
+  "author": "Peter Snyder <pes@brave.com>",
   "license": "ISC",
   "dependencies": {
     "ad-block": "git+git@github.com:brave/ad-block.git#dcfc5847b6291d30ac07537cb861772c1a158ece",
