@@ -15,7 +15,7 @@
   "author": "Peter Snyder <pes@brave.com>",
   "license": "ISC",
   "dependencies": {
-    "ad-block": "git+git@github.com:brave/ad-block.git#dcfc5847b6291d30ac07537cb861772c1a158ece",
+    "ad-block": "brave/ad-block#dcfc5847b6291d30ac07537cb861772c1a158ece",
     "aws-sdk": "^2.224.1",
     "fs-extra": "^5.0.0",
     "lodash": "^4.17.5",
