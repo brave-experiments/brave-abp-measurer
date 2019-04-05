@@ -10,6 +10,7 @@ const awsSdk = require("aws-sdk");
 // but its already a dependency of another package,
 // so we can depend on it for "free".
 const lodash = require("lodash");
+const globLib = require("glob");
 
 const crawler = require("./lib/crawl");
 const db = require("./lib/db");
@@ -22,7 +23,9 @@ const chromeHeadlessPath = path.join(localResourcesDir, "headless-chromium");
 
 const existsPromise = util.promisify(fs.pathExists);
 const emptyDirPromise = util.promisify(fs.emptyDir);
+const globPromise = util.promisify(globLib);
 const rmdirPromise = util.promisify(fs.rmdir);
+const unlinkPromise = util.promisify(fs.unlink);
 
 const possibleTempDirs = [
     "/tmp/data-path",
@@ -40,8 +43,10 @@ async function cleanTempDir () {
             cleanedDirs.push(tempPath);
         }
     }
-
-    return cleanedDirs;
+    const coreDumps = await globPromise("/tmp/core.*");
+    for (const aCoreDumpPath of coreDumps) {
+        await unlinkPromise(aCoreDumpPath);
+    }
 }
 
 const dispatch = async lambdaEvent => {
